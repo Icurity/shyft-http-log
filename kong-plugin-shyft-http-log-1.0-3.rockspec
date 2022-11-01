@@ -1,5 +1,5 @@
 package = "kong-plugin-shyft-http-log"
-version = "1.0"
+version = "1.0-3"
 
 source = {
   url = "https://github.com/Icurity/shyft-http-log.git"
