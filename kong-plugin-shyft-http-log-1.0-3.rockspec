@@ -1,4 +1,4 @@
-package = "kong-plugin-shyft-http-log"
+package = "shyft-http-log"
 version = "1.0-3"
 
 source = {
@@ -17,7 +17,7 @@ dependencies = {
 build = {
   type = "builtin",
   modules = {
-    ["kong.plugin.kong-plugin-shyft-http-log.handler"] = "plugin/handler.lua",
-    ["kong.plugin.kong-plugin-shyft-http-log.schema"] = "plugin/schema.lua",
+    ["kong.plugin.shyft-http-log.handler"] = "plugin/handler.lua",
+    ["kong.plugin.shyft-http-log.schema"] = "plugin/schema.lua",
   }
 }
