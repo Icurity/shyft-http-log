@@ -17,7 +17,7 @@ dependencies = {
 build = {
   type = "builtin",
   modules = {
-    ["kong.plugin.shyft-http-log.handler"] = "plugin/handler.lua",
-    ["kong.plugin.shyft-http-log.schema"] = "plugin/schema.lua",
+    ["kong.plugin.loki-log.handler"] = "plugin/handler.lua",
+    ["kong.plugin.loki-log.schema"] = "plugin/schema.lua",
   }
 }
