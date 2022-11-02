@@ -1,4 +1,4 @@
-package = "kong-plugin-shyft-http-log"
+package = "kong-plugin-jwt2header"
 version = "1.0-3"
 
 source = {
@@ -17,7 +17,7 @@ dependencies = {
 build = {
   type = "builtin",
   modules = {
-    ["kong.plugin.loki-log.handler"] = "plugin/handler.lua",
-    ["kong.plugin.loki-log.schema"] = "plugin/schema.lua",
+    ["kong.plugin.kong-jwt2header.handler"] = "plugin/handler.lua",
+    ["kong.plugin.kong-jwt2header.schema"] = "plugin/schema.lua",
   }
 }
