@@ -2,7 +2,7 @@ local typedefs = require "kong.db.schema.typedefs"
 local url = require "socket.url"
 
 return {
-  name = "shyft-http-log",
+  name = "kong-to-loki",
   fields = {
     { protocols = typedefs.protocols },
     {
@@ -17,7 +17,7 @@ return {
             {  queue_size = { type = "integer", default = 1 }, },
             {  error_mode = { type = "boolean", default = true }, },
             {  flush_timeout = { type = "number", default = 2 }, },
-            {  http_endpoint = typedefs.url({ required = true, encrypted = true }) }, -- encrypted = true is a Kong-Enterprise exclusive feature, does nothing in Kong CE
+            {  http_endpoint = typedefs.url({ required = false, encrypted = true }) }, -- encrypted = true is a Kong-Enterprise exclusive feature, does nothing in Kong CE
             {  headers = {
                 type = "map",
                 keys = typedefs.header_name {
@@ -42,18 +42,6 @@ return {
             }},
             --{ custom_fields_by_lua = typedefs.lua_code },          
         },
-        custom_validator = function(config)
-          -- check no double userinfo + authorization header
-          local parsed_url = url.parse(config.http_endpoint)
-          if parsed_url.userinfo and config.headers and config.headers ~= ngx.null then
-            for hname, hvalue in pairs(config.headers) do
-              if hname:lower() == "authorization" then
-                return false, "specifying both an 'Authorization' header and user info in 'http_endpoint' is not allowed"
-              end
-            end
-          end
-          return true
-        end,
       },
     },
   },

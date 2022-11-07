@@ -6,7 +6,6 @@ local url = require "socket.url"
 local http = require "resty.http"
 local table_clear = require "table.clear"
 local sandbox = require "kong.tools.sandbox".sandbox
-local kong_meta = require "kong.meta"
 local zlib = require "ffi-zlib"
 
 
@@ -74,62 +73,75 @@ local function parse_url(host_url)
   return parsed_url
 end
 
+-- check for nil or emptu.
+-- @param `string` host url
+-- @return `true or false`
+local function isempty(s)
+  return s == nil or s == ''
+end
+
 -- Sends the provided payload (a string) to the configured plugin host
 -- @return true if everything was sent correctly, falsy if error
 -- @return error message if there was an error
 local function log_payload(self, conf, payload)
   ngx.log(ngx.NOTICE, "http log" .. payload)
-  local method = conf.method
-  local timeout = conf.timeout
-  local keepalive = conf.keepalive
-  local content_type = conf.content_type
-  local http_endpoint = conf.http_endpoint
-
-  local parsed_url = parse_url(http_endpoint)
-  local host = parsed_url.host
-  local port = tonumber(parsed_url.port)
-
-  local httpc = http.new()
-  httpc:set_timeout(timeout)
-
-  table_clear(headers_cache)
-  if conf.headers then
-    for h, v in pairs(conf.headers) do
-      headers_cache[h] = v
-    end
-  end
-
-  headers_cache["Host"] = parsed_url.host
-  headers_cache["Content-Type"] = content_type
-  headers_cache["Content-Length"] = #payload
-  if parsed_url.userinfo then
-    headers_cache["Authorization"] = "Basic " .. encode_base64(parsed_url.userinfo)
-  end
-
-  params_cache.method = method
-  params_cache.body = payload
-  params_cache.keepalive_timeout = keepalive
-
-  local url = fmt("%s://%s:%d%s", parsed_url.scheme, parsed_url.host, parsed_url.port, parsed_url.path)
-
-  -- note: `httpc:request` makes a deep copy of `params_cache`, so it will be
-  -- fine to reuse the table here
-  local res, err = httpc:request_uri(url, params_cache)
-  if not res then
-    return nil, "failed request to " .. host .. ":" .. tostring(port) .. ": " .. err
-  end
-
-  -- always read response body, even if we discard it without using it on success
-  local response_body = res.body
-  local success = res.status < 400
+  local success = true
   local err_msg
+  local http_endpoint = conf.http_endpoint
+  if not isempty(http_endpoint) then
+    local method = conf.method
+    local timeout = conf.timeout
+    local keepalive = conf.keepalive
+    local content_type = conf.content_type
+    
 
-  if not success then
-    err_msg = "request to " .. host .. ":" .. tostring(port) ..
-              " returned status code " .. tostring(res.status) .. " and body " ..
-              response_body
-  end
+    local parsed_url = parse_url(http_endpoint)
+    local host = parsed_url.host
+    local port = tonumber(parsed_url.port)
 
+    local httpc = http.new()
+    httpc:set_timeout(timeout)
+
+    table_clear(headers_cache)
+    if conf.headers then
+      for h, v in pairs(conf.headers) do
+        headers_cache[h] = v
+      end
+    end
+
+    headers_cache["Host"] = parsed_url.host
+    headers_cache["Content-Type"] = content_type
+    headers_cache["Content-Length"] = #payload
+    if parsed_url.userinfo then
+      headers_cache["Authorization"] = "Basic " .. encode_base64(parsed_url.userinfo)
+    end
+
+    params_cache.method = method
+    params_cache.body = payload
+    params_cache.keepalive_timeout = keepalive
+
+  
+    local url = fmt("%s://%s:%d%s", parsed_url.scheme, parsed_url.host, parsed_url.port, parsed_url.path)
+
+    -- note: `httpc:request` makes a deep copy of `params_cache`, so it will be
+    -- fine to reuse the table here
+    local res, err = httpc:request_uri(url, params_cache)
+    if not res then
+      return nil, "failed request to " .. host .. ":" .. tostring(port) .. ": " .. err
+    end
+
+    -- always read response body, even if we discard it without using it on success
+    local response_body = res.body
+    success = res.status < 400
+
+    if not success then
+      err_msg = "request to " .. host .. ":" .. tostring(port) ..
+                " returned status code " .. tostring(res.status) .. " and body " ..
+                response_body
+    end
+
+    
+    end
   return success, err_msg
 end
 
@@ -158,16 +170,16 @@ end
 
 
 function HttpLogHandler:log(conf)
-  ngx.log(ngx.NOTICE, "HttpLogHandler:log")
+  --ngx.log(ngx.NOTICE, "HttpLogHandler:log")
   --ngx.log(ngx.NOTICE, "HttpLogHandler:log: incoming body" .. ngx.req.get_body_data())
   local logit = false
   if conf.error_mode and not string.find(tostring(kong.response.get_status()), "20") then
     logit = true
-    ngx.log(ngx.NOTICE, "HttpLogHandler:log: error_mode is true and response status does not contain 200")
+    --ngx.log(ngx.NOTICE, "HttpLogHandler:log: error_mode is true and response status does not contain 200")
   end
   if not conf.error_mode then
     logit = true
-    ngx.log(ngx.NOTICE, "HttpLogHandler:log: error_mode is false, so we send logs")
+    --ngx.log(ngx.NOTICE, "HttpLogHandler:log: error_mode is false, so we send logs")
   end
   ngx.log(ngx.NOTICE, "HttpLogHandler:log: logit value is:" .. tostring(logit))
   if logit then
@@ -186,9 +198,27 @@ function HttpLogHandler:log(conf)
 
     local jsonObj = kong.log.serialize()
     jsonObj.response.body = responseBod
+    -- remove all data we done need from the log payload
     jsonObj.route = nil
     jsonObj.tries = nil
     jsonObj.service = nil
+    jsonObj.workspace = nil
+    jsonObj.request.uri = nil
+    jsonObj.request.size = nil
+    jsonObj.request.querystring = nil
+    jsonObj.response.size = nil
+    jsonObj.response.headers = nil
+    jsonObj.started_at = nil
+    jsonObj.client_ip = nil
+    -- remove all other headers except those that start with 'x-'
+    for k, v in pairs(jsonObj.request.headers) do
+      --print(k," ", v)
+      if not (k:find("x", 1, true) == 1 or k:find("X", 1, true) == 1) then 
+        print(k," ", v)
+        jsonObj.request.headers[k] = nil
+      end
+      --ngx.log(ngx.NOTICE, "http log" .. payload)
+    end
     local entry = cjson.encode(jsonObj)
   
     local queue_id = get_queue_id(conf)
