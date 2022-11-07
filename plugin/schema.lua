@@ -2,7 +2,7 @@ local typedefs = require "kong.db.schema.typedefs"
 local url = require "socket.url"
 
 return {
-  name = "kong-to-loki",
+  name = "shyft-http-log",
   fields = {
     { protocols = typedefs.protocols },
     {
