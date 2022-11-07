@@ -1,3 +1,5 @@
+-- dynamic routing based on JWT Claim
+
 local BatchQueue = require "kong.tools.batch_queue"
 local cjson = require "cjson"
 local url = require "socket.url"
@@ -5,7 +7,22 @@ local http = require "resty.http"
 local table_clear = require "table.clear"
 local sandbox = require "kong.tools.sandbox".sandbox
 local kong_meta = require "kong.meta"
+local zlib = require "ffi-zlib"
 
+
+local sub = string.sub
+local type = type
+local pairs = pairs
+local lower = string.lower
+local inflate_gzip  = zlib.inflateGzip
+
+local jwt_decoder = require "kong.plugins.jwt.jwt_parser"
+
+
+local HttpLogHandler = {
+  PRIORITY = 12,
+  VERSION = "1.0"
+}
 
 local kong = kong
 local ngx = ngx
@@ -57,11 +74,11 @@ local function parse_url(host_url)
   return parsed_url
 end
 
-
 -- Sends the provided payload (a string) to the configured plugin host
 -- @return true if everything was sent correctly, falsy if error
 -- @return error message if there was an error
-local function send_payload(self, conf, payload)
+local function log_payload(self, conf, payload)
+  ngx.log(ngx.NOTICE, "http log" .. payload)
   local method = conf.method
   local timeout = conf.timeout
   local keepalive = conf.keepalive
@@ -134,52 +151,77 @@ local function get_queue_id(conf)
              conf.flush_timeout)
 end
 
-
-local HttpLogHandler = {
-  PRIORITY = 12,
-  VERSION = kong_meta.version,
-}
+function HttpLogHandler:access(conf)
+  --do this to get the response body else "Error: service body is only available with buffered proxying"
+  kong.service.request.enable_buffering()
+end
 
 
 function HttpLogHandler:log(conf)
-  if conf.custom_fields_by_lua then
-    local set_serialize_value = kong.log.set_serialize_value
-    for key, expression in pairs(conf.custom_fields_by_lua) do
-      set_serialize_value(key, sandbox(expression, sandbox_opts)())
-    end
+  ngx.log(ngx.NOTICE, "HttpLogHandler:log")
+  --ngx.log(ngx.NOTICE, "HttpLogHandler:log: incoming body" .. ngx.req.get_body_data())
+  local logit = false
+  if conf.error_mode and not string.find(tostring(kong.response.get_status()), "20") then
+    logit = true
+    ngx.log(ngx.NOTICE, "HttpLogHandler:log: error_mode is true and response status does not contain 200")
   end
-
-  local entry = cjson.encode(kong.log.serialize())
-
-  local queue_id = get_queue_id(conf)
-  local q = queues[queue_id]
-  if not q then
-    -- batch_max_size <==> conf.queue_size
-    local batch_max_size = conf.queue_size or 1
-    local process = function(entries)
-      local payload = batch_max_size == 1
-                      and entries[1]
-                      or  json_array_concat(entries)
-      return send_payload(self, conf, payload)
+  if not conf.error_mode then
+    logit = true
+    ngx.log(ngx.NOTICE, "HttpLogHandler:log: error_mode is false, so we send logs")
+  end
+  ngx.log(ngx.NOTICE, "HttpLogHandler:log: logit value is:" .. tostring(logit))
+  if logit then
+    if conf.custom_fields_by_lua then
+      local set_serialize_value = kong.log.set_serialize_value
+      for key, expression in pairs(conf.custom_fields_by_lua) do
+        set_serialize_value(key, sandbox(expression, sandbox_opts)())
+      end
     end
 
-    local opts = {
-      retry_count    = conf.retry_count,
-      flush_timeout  = conf.flush_timeout,
-      batch_max_size = batch_max_size,
-      process_delay  = 0,
-    }
+    local responseBod = kong.service.response.get_raw_body()
+    local encoding = kong.response.get_header("Content-Encoding")
+    if encoding == "gzip" then
+      responseBod = inflate_gzip(responseBod)
+    end
 
-    local err
-    q, err = BatchQueue.new(process, opts)
+    local jsonObj = kong.log.serialize()
+    jsonObj.response.body = responseBod
+    jsonObj.route = nil
+    jsonObj.tries = nil
+    jsonObj.service = nil
+    local entry = cjson.encode(jsonObj)
+  
+    local queue_id = get_queue_id(conf)
+    local q = queues[queue_id]
     if not q then
-      kong.log.err("could not create queue: ", err)
-      return
+      -- batch_max_size <==> conf.queue_size
+      local batch_max_size = conf.queue_size or 1
+      local process = function(entries)
+        local payload = batch_max_size == 1
+                        and entries[1]
+                        or  json_array_concat(entries)
+        return log_payload(self, conf, payload)
+      end
+  
+      local opts = {
+        retry_count    = conf.retry_count,
+        flush_timeout  = conf.flush_timeout,
+        batch_max_size = batch_max_size,
+        process_delay  = 0,
+      }
+  
+      local err
+      q, err = BatchQueue.new(process, opts)
+      if not q then
+        kong.log.err("could not create queue: ", err)
+        return
+      end
+      queues[queue_id] = q
     end
-    queues[queue_id] = q
+  
+    q:add(entry)
   end
-
-  q:add(entry)
+  
 end
 
 
