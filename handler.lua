@@ -80,11 +80,15 @@ local function isempty(s)
   return s == nil or s == ''
 end
 
+local function getResponseJson(s)
+  return cjson.decode(s)
+end
+
 -- Sends the provided payload (a string) to the configured plugin host
 -- @return true if everything was sent correctly, falsy if error
 -- @return error message if there was an error
 local function log_payload(self, conf, payload)
-  ngx.log(ngx.NOTICE, "http log" .. payload)
+  ngx.log(ngx.ERR, "httplog: " .. payload)
   local success = true
   local err_msg
   local http_endpoint = conf.http_endpoint
@@ -170,18 +174,28 @@ end
 
 
 function HttpLogHandler:log(conf)
-  --ngx.log(ngx.NOTICE, "HttpLogHandler:log")
-  --ngx.log(ngx.NOTICE, "HttpLogHandler:log: incoming body" .. ngx.req.get_body_data())
   local logit = false
-  if conf.error_mode and not string.find(tostring(kong.response.get_status()), "20") then
+  local graph_call =  tostring(ngx.var.upstream_uri) == conf.graphql_uri
+  if not graph_call and not (tostring(kong.response.get_status()):find("2", 1, true) == 1) then
     logit = true
-    --ngx.log(ngx.NOTICE, "HttpLogHandler:log: error_mode is true and response status does not contain 200")
   end
-  if not conf.error_mode then
-    logit = true
-    --ngx.log(ngx.NOTICE, "HttpLogHandler:log: error_mode is false, so we send logs")
+  if graph_call then
+    if kong.service.response.get_raw_body() then
+      status, jsonVal, err = xpcall (getResponseJson, debug.traceback, kong.service.response.get_raw_body())
+      ngx.log(ngx.DEBUG, "json_decode_staus: " .. status)
+      ngx.log(ngx.DEBUG, "json_decode_error: " .. err)
+      ngx.log(ngx.DEBUG, "json_decode_returned_val: " .. jsonVal)
+      if not err then
+        local body_ = jsonVal
+        logit =  body_.errors  ~= nil 
+        ngx.log(ngx.DEBUG, cjson.encode(body_.errors))
+      elseif not (tostring(kong.response.get_status()):find("2", 1, true) == 1) then
+        logit = true
+      end
+      
+    end
+    
   end
-  ngx.log(ngx.NOTICE, "HttpLogHandler:log: logit value is:" .. tostring(logit))
   if logit then
     if conf.custom_fields_by_lua then
       local set_serialize_value = kong.log.set_serialize_value
@@ -189,8 +203,17 @@ function HttpLogHandler:log(conf)
         set_serialize_value(key, sandbox(expression, sandbox_opts)())
       end
     end
-
-    local responseBod = kong.service.response.get_raw_body()
+    local ctx = ngx.ctx
+    local responseBod
+    --some time kong is the one throwing the error so buffered_proxy wont be set as the upstream is not called
+    if ctx.buffered_proxying then
+      responseBod = kong.service.response.get_raw_body()
+      else
+        local t = { ["message"] = "Error thrown by Kong"}
+        responseBod = cjson.encode(t)
+    end
+    
+    
     local encoding = kong.response.get_header("Content-Encoding")
     if encoding == "gzip" then
       responseBod = inflate_gzip(responseBod)
@@ -203,6 +226,7 @@ function HttpLogHandler:log(conf)
     jsonObj.tries = nil
     jsonObj.service = nil
     jsonObj.workspace = nil
+    jsonObj.authenticated_entity = nil
     jsonObj.request.uri = nil
     jsonObj.request.size = nil
     jsonObj.request.querystring = nil
@@ -212,12 +236,9 @@ function HttpLogHandler:log(conf)
     jsonObj.client_ip = nil
     -- remove all other headers except those that start with 'x-'
     for k, v in pairs(jsonObj.request.headers) do
-      --print(k," ", v)
       if not (k:find("x", 1, true) == 1 or k:find("X", 1, true) == 1) then 
-        print(k," ", v)
         jsonObj.request.headers[k] = nil
       end
-      --ngx.log(ngx.NOTICE, "http log" .. payload)
     end
     local entry = cjson.encode(jsonObj)
   
